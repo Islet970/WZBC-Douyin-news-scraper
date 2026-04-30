@@ -141,39 +141,43 @@ function normalizeVideo(item) {
   };
 }
 
-// 点击第一个可见的文本节点；用于定位“日期筛选”和“2026年4月”。
-async function clickText(page, texts) {
-  for (const text of texts) {
-    const locator = page.getByText(text, { exact: false }).first();
+async function findExactText(page, text, timeout = 8000) {
+  const candidates = [
+    page.getByText(text, { exact: true }).first(),
+    page.locator(`[title="${text}"], [aria-label="${text}"]`).first(),
+    page.locator(`xpath=//*[normalize-space(text())="${text}"]`).first(),
+  ];
+
+  let lastError;
+  for (const locator of candidates) {
     try {
-      await locator.waitFor({ state: "visible", timeout: 3000 });
-      await locator.click({ timeout: 3000 });
-      return true;
-    } catch (_) {
-      // 继续尝试下一个候选文本。
+      await locator.waitFor({ state: "visible", timeout });
+      await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      return locator;
+    } catch (error) {
+      lastError = error;
     }
   }
-  return false;
+
+  throw new Error(`没有在页面中找到“${text}”。${lastError ? ` ${lastError.message}` : ""}`);
 }
 
 async function selectApril2026(page) {
-  const opened = await clickText(page, ["日期筛选", "发布时间", "时间筛选"]);
-  if (!opened) throw new Error("没有在页面中找到“日期筛选”。");
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await page.waitForTimeout(500);
+
+  const dateFilter = await findExactText(page, "日期筛选");
+  await dateFilter.hover({ timeout: 3000 });
 
   await page.waitForTimeout(800);
 
-  const selected = await clickText(page, ["2026年4月", "2026 年 4 月", "2026-04", "2026/04"]);
-  if (selected) return;
+  const year = await findExactText(page, "2026年");
+  await year.hover({ timeout: 3000 });
 
-  // 有些页面会把年份和月份拆开显示，先点 2026，再点 4月。
-  const yearSelected = await clickText(page, ["2026"]);
-  if (yearSelected) {
-    await page.waitForTimeout(500);
-    const monthSelected = await clickText(page, ["4月", "04月", "四月"]);
-    if (monthSelected) return;
-  }
+  await page.waitForTimeout(800);
 
-  throw new Error("没有在日期筛选中找到“2026年4月”。");
+  const month = await findExactText(page, "04月");
+  await month.click({ timeout: 3000 });
 }
 
 async function main() {
