@@ -6,9 +6,9 @@
  * 流程：
  * 1. 打开目标抖音主页。
  * 2. 等你处理验证码/登录。
- * 3. 在页面 HTML 中定位“日期筛选”，选择“2026年4月”。
- * 4. 等筛选结果加载完成后，滚动页面并监听作品接口。
- * 5. 跳过置顶视频，只保存视频标题和 via。
+ * 3. 从当前网页开始滚动，并监听作品接口。
+ * 4. 跳过置顶视频，只保存发布时间属于 2026 年 4 月的视频标题和 via。
+ * 5. 一旦遇到第一个非 2026 年 4 月的非置顶视频，就停止爬取。
  *
  * 运行：
  *   node douyin_scraper.js
@@ -21,7 +21,8 @@ const path = require("path");
 const PROFILE_URL =
   "https://www.douyin.com/user/MS4wLjABAAAAnqfUZ9I36MTOExGSvYX0RpBDJuQ4IIvrreOF3DzhefQ";
 const OUTPUT_DIR = __dirname;
-const TARGET_LABEL = "2026年4月";
+const TARGET_YEAR = 2026;
+const TARGET_MONTH = 4;
 const FALLBACK_PLAYWRIGHT =
   "C:\\Users\\Voidkongbai\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\playwright";
 
@@ -71,6 +72,61 @@ function csvEscape(value) {
 
 function truncateChars(value, maxChars) {
   return Array.from(String(value ?? "")).slice(0, maxChars).join("");
+}
+
+function normalizeTimestamp(value) {
+  if (value == null || value === "") return null;
+
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+
+  return number > 10_000_000_000 ? number : number * 1000;
+}
+
+function findPublishTimestamp(item, depth = 0, seen = new Set()) {
+  if (!item || typeof item !== "object" || depth > 4 || seen.has(item)) return null;
+  seen.add(item);
+
+  const directKeys = [
+    "create_time",
+    "createTime",
+    "publish_time",
+    "publishTime",
+    "create_time_ms",
+    "createTimeMs",
+  ];
+
+  for (const key of directKeys) {
+    const timestamp = normalizeTimestamp(item[key]);
+    if (timestamp) return timestamp;
+  }
+
+  for (const [key, value] of Object.entries(item)) {
+    const k = key.toLowerCase();
+    if ((k.includes("create") || k.includes("publish")) && k.includes("time")) {
+      const timestamp = normalizeTimestamp(value);
+      if (timestamp) return timestamp;
+    }
+  }
+
+  for (const value of Object.values(item)) {
+    const timestamp = findPublishTimestamp(value, depth + 1, seen);
+    if (timestamp) return timestamp;
+  }
+
+  return null;
+}
+
+function getPublishDate(item) {
+  const timestamp = findPublishTimestamp(item);
+  return timestamp ? new Date(timestamp) : null;
+}
+
+function isTargetMonth(item) {
+  const date = getPublishDate(item);
+  if (!date) return false;
+
+  return date.getFullYear() === TARGET_YEAR && date.getMonth() + 1 === TARGET_MONTH;
 }
 
 // 判断接口中的视频是否置顶。"\u7f6e\u9876" 是“置顶”，避免源码编码问题。
@@ -141,45 +197,6 @@ function normalizeVideo(item) {
   };
 }
 
-async function findExactText(page, text, timeout = 8000) {
-  const candidates = [
-    page.getByText(text, { exact: true }).first(),
-    page.locator(`[title="${text}"], [aria-label="${text}"]`).first(),
-    page.locator(`xpath=//*[normalize-space(text())="${text}"]`).first(),
-  ];
-
-  let lastError;
-  for (const locator of candidates) {
-    try {
-      await locator.waitFor({ state: "visible", timeout });
-      await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-      return locator;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw new Error(`没有在页面中找到“${text}”。${lastError ? ` ${lastError.message}` : ""}`);
-}
-
-async function selectApril2026(page) {
-  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-  await page.waitForTimeout(500);
-
-  const dateFilter = await findExactText(page, "日期筛选");
-  await dateFilter.hover({ timeout: 3000 });
-
-  await page.waitForTimeout(800);
-
-  const year = await findExactText(page, "2026年");
-  await year.hover({ timeout: 3000 });
-
-  await page.waitForTimeout(800);
-
-  const month = await findExactText(page, "04月");
-  await month.click({ timeout: 3000 });
-}
-
 async function main() {
   const options = parseArgs();
   const { chromium } = loadPlaywright();
@@ -199,9 +216,12 @@ async function main() {
 
   const page = context.pages()[0] || (await context.newPage());
   let hasMore = true;
+  let reachedNonTargetMonth = false;
+  let resolveNextResponse = null;
 
-  // 监听筛选后作品接口返回的数据；因为页面已经选了 2026年4月，所以不再判断日期。
+  // Listen to the current page's post API and filter videos by publish time.
   page.on("response", async (response) => {
+    if (reachedNonTargetMonth) return;
     if (!response.url().includes("/aweme/v1/web/aweme/post/")) return;
 
     try {
@@ -210,6 +230,21 @@ async function main() {
 
       for (const item of extractAwemeList(payload)) {
         if (isPinned(item)) continue;
+
+        const date = getPublishDate(item);
+        if (!date) {
+          const row = normalizeVideo(item);
+          console.warn(`视频 ${row.aweme_id || row.title || "unknown"} 缺少可识别发布时间，已跳过。`);
+          continue;
+        }
+
+        if (!isTargetMonth(item)) {
+          const label = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}` : "unknown";
+          reachedNonTargetMonth = true;
+          hasMore = false;
+          console.log(`遇到非目标月份视频（${label}），停止继续爬取。`);
+          break;
+        }
         const row = normalizeVideo(item);
         if (row.aweme_id && row.title) rowsById.set(row.aweme_id, row);
       }
@@ -218,27 +253,25 @@ async function main() {
     } catch (error) {
       console.warn(`接口解析失败：${error.message}`);
     }
+
+    if (resolveNextResponse) {
+      resolveNextResponse();
+      resolveNextResponse = null;
+    }
   });
 
   console.log(`输出目录：${OUTPUT_DIR}`);
   console.log("正在打开抖音主页。如出现验证码或登录页，请先在 Chrome 中手动完成。");
   await page.goto(PROFILE_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await waitForEnter("看到作品列表后，回到此命令行窗口按 Enter，脚本会自动选择“日期筛选 -> 2026年4月”。");
-
-  try {
-    await selectApril2026(page);
-    console.log("已选择日期筛选：2026年4月。");
-  } catch (error) {
-    console.warn(`${error.message}`);
-    await waitForEnter("请在页面中手动选择“日期筛选 -> 2026年4月”，筛选结果加载后回到这里按 Enter 继续。");
-  }
+  await waitForEnter("看到作品列表后，回到此命令行窗口按 Enter，脚本会直接监听当前网页作品并开始滚动。");
 
   await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(2000);
 
-  for (let i = 0; i < options.maxScrolls && hasMore; i += 1) {
+  for (let i = 0; i < options.maxScrolls && hasMore && !reachedNonTargetMonth; i += 1) {
+    const nextResponse = new Promise((resolve) => { resolveNextResponse = resolve; });
     await page.mouse.wheel(0, 1800);
-    await page.waitForTimeout(1500);
+    await Promise.race([nextResponse, new Promise((resolve) => setTimeout(resolve, 5000))]);
   }
 
   await page.waitForTimeout(2000);
