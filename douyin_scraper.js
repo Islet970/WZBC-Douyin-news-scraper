@@ -65,11 +65,6 @@ function fileTimestamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function csvEscape(value) {
-  const text = String(value ?? "");
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
 function truncateChars(value, maxChars) {
   return Array.from(String(value ?? "")).slice(0, maxChars).join("");
 }
@@ -300,19 +295,12 @@ async function main() {
 
   const rows = Array.from(rowsById.values());
   const stamp = fileTimestamp();
-  const csvPath = path.join(OUTPUT_DIR, `douyin_videos_2026_04_${stamp}.csv`);
-  const jsonPath = path.join(OUTPUT_DIR, `douyin_videos_2026_04_${stamp}.json`);
-  const csv = [
-    ["title", "via", "aweme_id", "url"].join(","),
-    ...rows.map((row) => [row.title, row.via, row.aweme_id, row.url].map(csvEscape).join(",")),
-  ].join("\r\n");
+  const jsonPath = path.join(OUTPUT_DIR, `douyin_videos_${TARGET_YEAR}_${String(TARGET_MONTH).padStart(2, "0")}_${stamp}.json`);
 
-  fs.writeFileSync(csvPath, `\ufeff${csv}`, "utf8");
   fs.writeFileSync(jsonPath, JSON.stringify(rows, null, 2), "utf8");
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`完成，共保存 ${rows.length} 条，耗时 ${elapsed} 秒。`);
-  console.log(`CSV：${csvPath}`);
   console.log(`JSON：${jsonPath}`);
 }
 

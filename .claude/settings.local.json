@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(git config *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(xxd douyin_scraper.js)"
     ]
   }
 }
