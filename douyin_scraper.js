@@ -260,6 +260,8 @@ async function main() {
     }
   });
 
+  const startTime = Date.now();
+
   console.log(`输出目录：${OUTPUT_DIR}`);
   console.log("正在打开抖音主页。如出现验证码或登录页，请先在 Chrome 中手动完成。");
   await page.goto(PROFILE_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -289,7 +291,8 @@ async function main() {
   fs.writeFileSync(csvPath, `\ufeff${csv}`, "utf8");
   fs.writeFileSync(jsonPath, JSON.stringify(rows, null, 2), "utf8");
 
-  console.log(`完成，共保存 ${rows.length} 条。`);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`完成，共保存 ${rows.length} 条，耗时 ${elapsed} 秒。`);
   console.log(`CSV：${csvPath}`);
   console.log(`JSON：${jsonPath}`);
 }
