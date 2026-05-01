@@ -22,7 +22,7 @@ const PROFILE_URL =
   "https://www.douyin.com/user/MS4wLjABAAAAnqfUZ9I36MTOExGSvYX0RpBDJuQ4IIvrreOF3DzhefQ";
 const OUTPUT_DIR = __dirname;
 const TARGET_YEAR = 2026;
-const TARGET_MONTH = 4;
+const TARGET_MONTH = 3;
 const FALLBACK_PLAYWRIGHT =
   "C:\\Users\\Voidkongbai\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\playwright";
 
@@ -129,6 +129,16 @@ function isTargetMonth(item) {
   return date.getFullYear() === TARGET_YEAR && date.getMonth() + 1 === TARGET_MONTH;
 }
 
+// -1 = 早于目标月份, 0 = 目标月份内, 1 = 晚于目标月份, null = 无法判断
+function compareToTargetMonth(item) {
+  const date = getPublishDate(item);
+  if (!date) return null;
+  const targetStart = new Date(TARGET_YEAR, TARGET_MONTH - 1, 1);
+  const targetEnd = new Date(TARGET_YEAR, TARGET_MONTH, 1);
+  if (date >= targetStart && date < targetEnd) return 0;
+  return date < targetStart ? -1 : 1;
+}
+
 // 判断接口中的视频是否置顶。"\u7f6e\u9876" 是“置顶”，避免源码编码问题。
 function isPinned(item) {
   const flags = [item.is_top, item.isTop, item.is_pinned, item.isPinned, item.top, item.stick_top, item.stickTop];
@@ -216,6 +226,7 @@ async function main() {
 
   const page = context.pages()[0] || (await context.newPage());
   let hasMore = true;
+  let startedCollecting = false;
   let reachedNonTargetMonth = false;
   let resolveNextResponse = null;
 
@@ -238,18 +249,26 @@ async function main() {
           continue;
         }
 
-        if (!isTargetMonth(item)) {
-          const label = date ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}` : "unknown";
+        const cmp = compareToTargetMonth(item);
+        if (cmp === 0) {
+          if (!startedCollecting) {
+            startedCollecting = true;
+            console.log(`进入目标月份（${TARGET_YEAR}-${String(TARGET_MONTH).padStart(2, "0")}），开始统计。`);
+          }
+          const row = normalizeVideo(item);
+          if (row.aweme_id && row.title) rowsById.set(row.aweme_id, row);
+        } else if (cmp === -1 && startedCollecting) {
+          const label = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
           reachedNonTargetMonth = true;
           hasMore = false;
           console.log(`遇到非目标月份视频（${label}），停止继续爬取。`);
           break;
         }
-        const row = normalizeVideo(item);
-        if (row.aweme_id && row.title) rowsById.set(row.aweme_id, row);
       }
 
-      console.log(`已捕获 ${rowsById.size} 条非置顶视频。`);
+      if (startedCollecting) {
+        console.log(`已捕获 ${rowsById.size} 条非置顶视频。`);
+      }
     } catch (error) {
       console.warn(`接口解析失败：${error.message}`);
     }
