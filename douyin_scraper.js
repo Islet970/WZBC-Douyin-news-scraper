@@ -22,7 +22,7 @@ const PROFILE_URL =
   "https://www.douyin.com/user/MS4wLjABAAAAnqfUZ9I36MTOExGSvYX0RpBDJuQ4IIvrreOF3DzhefQ";
 const OUTPUT_DIR = __dirname;
 const TARGET_YEAR = 2026;
-const TARGET_MONTH = 3;
+const TARGET_MONTH = 4;
 const FALLBACK_PLAYWRIGHT =
   "C:\\Users\\Voidkongbai\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\node_modules\\playwright";
 
